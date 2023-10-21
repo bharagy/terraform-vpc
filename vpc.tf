@@ -1,96 +1,96 @@
+# Initialize Terraform and AWS provider
 provider "aws" {
-  region = "us-east-2"
-  profile = "default"
+  region = "us-east-1" # Change to your desired AWS region
 }
 
-resource "aws_instance" "ec2" {
-    ami = "ami-0e83be366243f524a"
-    instance_type = "t2.micro"
-    key_name = "prd01"
-   //vpc_security_group_ids = ["${aws_security_group.rtp03-sg.id}"]
-   subnet_id = "${aws_subnet.rtp03-public_subnet_01.id}"
+# Create a VPC
+resource "aws_vpc" "my_vpc" {
+  cidr_block = "10.0.0.0/16"
 }
 
-
-
-resource "aws_security_group" "rtp03-sg" {
-    name = "rtp03-sg"
-    vpc_id = "${aws_vpc.rtp03-vpc.id}"
-    ingress {
-        from_port = 22
-        to_port = 22
-        protocol = "tcp"
-        cidr_blocks = ["0.0.0.0/0"]
-    
-    }
-
-
-  ingress {
-         from_port = 80
-         to_port = 80
-         protocol = "tcp"
-         cidr_blocks = ["0.0.0.0/0"]
-
-    }
-    egress {
-         from_port = 0
-         to_port = 0
-         protocol = "-1"
-         cidr_blocks = ["0.0.0.0/0"]
-    }
-    
-    tags = {
-        Name = "ssh-sg"
-
-    }
-
-}
-//creating a vpc
-resource "aws_vpc" "rtp03-vpc" {
-    cidr_block = "10.1.0.0/16"
-    tags = {
-      Name = "rtp03-vpc"
-    }
-
+# Create a public subnet
+resource "aws_subnet" "public_subnet" {
+  vpc_id     = aws_vpc.my_vpc.id
+  cidr_block = "10.0.1.0/24"
+  availability_zone = "us-east-1a" # Change to your desired AZ
+  map_public_ip_on_launch = true
 }
 
-
-// Creating a subnet
-resource "aws_subnet" "rtp03-public_subnet_01" {
-    vpc_id = "${aws_vpc.rtp03-vpc.id}"
-    cidr_block = "10.1.1.0/24"
-    map_public_ip_on_launch = "true"
-    availability_zone = "us-east-2a"
-    tags = {
-      Name = "rtp03-public-subnet_01"
-    }
-
+# Create a private subnet
+resource "aws_subnet" "private_subnet" {
+  vpc_id     = aws_vpc.my_vpc.id
+  cidr_block = "10.0.2.0/24"
+  availability_zone = "us-east-1b" # Change to your desired AZ
 }
 
-//Creating a Internet Gateway
-resource "aws_internet_gateway" "rtp03-igw" {
-    vpc_id = "${aws_vpc.rtp03-vpc.id}"
-    tags = {
-      Name = "rtp03-igw"
-    }
+# Create a security group for RDS
+resource "aws_security_group" "rds_sg" {
+  name        = "rds_sg"
+  description = "RDS security group"
+  vpc_id      = aws_vpc.my_vpc.id
 }
 
-// Create a route table
-resource "aws_route_table" "rtp03-public-rt" {
-    vpc_id = "${aws_vpc.rtp03-vpc.id}"
-    route {
-        cidr_block = "0.0.0.0/0"
-        gateway_id = "${aws_internet_gateway.rtp03-igw.id}"
-    }
-    tags = {
-      Name = "rtp03-public-rt"
-    }
+# Allow incoming traffic to the RDS instance from EC2 instances
+resource "aws_security_group_rule" "rds_ingress" {
+  type        = "ingress"
+  from_port   = 3306
+  to_port     = 3306
+  protocol    = "tcp"
+  cidr_blocks = [aws_subnet.private_subnet.cidr_block]
+  security_group_id = aws_security_group.rds_sg.id
 }
 
-// Associate subnet with routetable
+resource "aws_db_subnet_group" "db-subnet-group" {
+  name       = "db_subnet_group"
+  subnet_ids = [aws_subnet.public_subnet.id, aws_subnet.private_subnet.id]
 
-resource "aws_route_table_association" "rtp03-rta-public-subnet-1" {
-    subnet_id = "${aws_subnet.rtp03-public_subnet_01.id}"
-    route_table_id = "${aws_route_table.rtp03-public-rt.id}"
+  tags = {
+    Name = "db_subnet_group"
+  }
+}
 
+# Create RDS MySQL instance
+resource "aws_db_instance" "mydb" {
+  allocated_storage    = 20
+  storage_type         = "gp2"
+  engine               = "mysql"
+  engine_version       = "5.7"
+  instance_class       = "db.t2.micro"
+  identifier           = "mydb"
+  username             = "myuser"
+  password             = "mypassword"
+  parameter_group_name = "default.mysql5.7"
+  skip_final_snapshot  = true
+  vpc_security_group_ids = [aws_security_group.rds_sg.id]
+  db_subnet_group_name   = aws_db_subnet_group.db-subnet-group.name
+
+
+  tags = {
+    Name = "mydb"
+  }
+}
+
+# Launch EC2 instances
+resource "aws_instance" "public_ec2" {
+  ami           = "ami-041feb57c611358bd" # Amazon Linux 2 AMI, change as needed
+  instance_type = "t2.micro"
+  subnet_id     = aws_subnet.public_subnet.id
+  key_name      = "prd01"
+  security_groups = [aws_security_group.rds_sg.id] # This will allow the EC2 instance to access the RDS
+}
+
+resource "aws_instance" "private_ec2" {
+  ami           = "ami-041feb57c611358bd" # Amazon Linux 2 AMI, change as needed
+  instance_type = "t2.micro"
+  subnet_id     = aws_subnet.private_subnet.id
+  key_name      = "prd01"
+}
+
+# Output the public and private EC2 instance IPs
+output "public_ec2_ip" {
+  value = aws_instance.public_ec2.private_ip
+}
+
+output "private_ec2_ip" {
+  value = aws_instance.private_ec2.private_ip
 }
